@@ -1,0 +1,14 @@
+{
+  "name": "sentinelone-mvp",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "build": "npm run -ws build",
+    "dev": "docker compose -f infra/docker/docker-compose.yml up --build",
+    "test": "npm run -ws test"
+  }
+}

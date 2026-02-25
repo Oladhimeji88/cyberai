@@ -1,0 +1,341 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  SECURITY
+  DEVOPS
+  AUDITOR
+  REQUESTER
+}
+
+enum TargetType {
+  SSH
+  CLOUD
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  TRIAGED
+  RESOLVED
+}
+
+enum FindingSource {
+  CSPM
+  RUNTIME
+}
+
+model Org {
+  id                String   @id @default(cuid())
+  name              String
+  rootSecretSalt    String
+  rootSecretVerifier String
+  awsRoleArn        String?
+  awsExternalId     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  users             User[]
+  projects          Project[]
+  secrets           Secret[]
+  pamTargets        PamTarget[]
+  pamRequests       PamRequest[]
+  findings          Finding[]
+  postureRuns       PostureRun[]
+  alerts            Alert[]
+  auditLogs         AuditLog[]
+  webhooks          Webhook[]
+  apiTokens         ApiToken[]
+}
+
+model User {
+  id             String   @id @default(cuid())
+  orgId          String
+  email          String
+  passwordHash   String
+  role           UserRole
+  isActive       Boolean  @default(true)
+  mfaEnabled     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  org            Org      @relation(fields: [orgId], references: [id])
+  mfa            Mfa?
+  devices        Device[]
+  refreshTokens  RefreshToken[]
+  pamRequests    PamRequest[] @relation("Requester")
+  approvals      PamApproval[]
+  alertEvents    AlertEvent[]
+
+  @@unique([orgId, email])
+}
+
+model Mfa {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  totpSecret   String
+  backupCodes  String[]
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id])
+}
+
+model Device {
+  id          String   @id @default(cuid())
+  userId      String
+  fingerprint String
+  label       String
+  lastSeenAt  DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+model RefreshToken {
+  id          String   @id @default(cuid())
+  userId      String
+  tokenHash   String
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  revokedAt   DateTime?
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  orgId       String
+  name        String
+  createdAt   DateTime @default(now())
+  org         Org      @relation(fields: [orgId], references: [id])
+  environments Environment[]
+}
+
+model Environment {
+  id         String   @id @default(cuid())
+  projectId  String
+  name       String
+  createdAt  DateTime @default(now())
+  project    Project  @relation(fields: [projectId], references: [id])
+}
+
+model PamTarget {
+  id            String   @id @default(cuid())
+  orgId         String
+  name          String
+  type          TargetType
+  host          String
+  port          Int
+  username      String
+  metadata      Json
+  createdAt     DateTime @default(now())
+  org           Org      @relation(fields: [orgId], references: [id])
+  requests      PamRequest[]
+}
+
+model PamRequest {
+  id             String       @id @default(cuid())
+  orgId          String
+  requesterId    String
+  targetId       String
+  reason         String
+  requestedUntil DateTime
+  status         RequestStatus @default(PENDING)
+  ephemeralCred  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  org            Org      @relation(fields: [orgId], references: [id])
+  requester      User     @relation("Requester", fields: [requesterId], references: [id])
+  target         PamTarget @relation(fields: [targetId], references: [id])
+  approvals      PamApproval[]
+  sessions       PamSession[]
+}
+
+model PamApproval {
+  id          String   @id @default(cuid())
+  requestId   String
+  approverId  String
+  approved    Boolean
+  reason      String
+  windowStart DateTime
+  windowEnd   DateTime
+  createdAt   DateTime @default(now())
+  request     PamRequest @relation(fields: [requestId], references: [id])
+  approver    User     @relation(fields: [approverId], references: [id])
+}
+
+model PamSession {
+  id          String   @id @default(cuid())
+  orgId       String
+  requestId   String
+  startedAt   DateTime @default(now())
+  endedAt     DateTime?
+  commandLog  Json
+  metadata    Json
+  request     PamRequest @relation(fields: [requestId], references: [id])
+}
+
+model Secret {
+  id             String   @id @default(cuid())
+  orgId          String
+  projectId      String?
+  environmentId  String?
+  name           String
+  description    String
+  encryptedDek   String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  org            Org      @relation(fields: [orgId], references: [id])
+  versions       SecretVersion[]
+  rotationPolicy RotationPolicy?
+
+  @@unique([orgId, name])
+}
+
+model SecretVersion {
+  id             String   @id @default(cuid())
+  secretId        String
+  version         Int
+  ciphertext      String
+  nonce           String
+  tag             String
+  createdBy       String
+  createdAt       DateTime @default(now())
+  secret          Secret   @relation(fields: [secretId], references: [id])
+
+  @@unique([secretId, version])
+}
+
+model RotationPolicy {
+  id           String   @id @default(cuid())
+  secretId      String   @unique
+  type          String
+  scheduleCron  String
+  config        Json
+  enabled       Boolean  @default(true)
+  lastRunAt     DateTime?
+  createdAt     DateTime @default(now())
+  secret        Secret   @relation(fields: [secretId], references: [id])
+  runs          RotationRun[]
+}
+
+model RotationRun {
+  id            String   @id @default(cuid())
+  policyId      String
+  status        String
+  output        Json
+  ranAt         DateTime @default(now())
+  policy        RotationPolicy @relation(fields: [policyId], references: [id])
+}
+
+model Finding {
+  id          String      @id @default(cuid())
+  orgId       String
+  source      FindingSource
+  checkId     String
+  title       String
+  severity    AlertSeverity
+  resource    String
+  status      String
+  remediation String
+  metadata    Json
+  createdAt   DateTime @default(now())
+  org         Org      @relation(fields: [orgId], references: [id])
+}
+
+model PostureRun {
+  id           String   @id @default(cuid())
+  orgId        String
+  provider     String
+  score        Int
+  summary      Json
+  createdAt    DateTime @default(now())
+  org          Org      @relation(fields: [orgId], references: [id])
+}
+
+model Alert {
+  id           String      @id @default(cuid())
+  orgId        String
+  type         String
+  severity     AlertSeverity
+  title        String
+  description  String
+  status       AlertStatus @default(OPEN)
+  timeline     Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  org          Org      @relation(fields: [orgId], references: [id])
+  events       AlertEvent[]
+  responses    ResponseAction[]
+}
+
+model AlertEvent {
+  id          String   @id @default(cuid())
+  alertId      String
+  actorId      String?
+  type         String
+  message      String
+  createdAt    DateTime @default(now())
+  alert        Alert    @relation(fields: [alertId], references: [id])
+  actor        User?    @relation(fields: [actorId], references: [id])
+}
+
+model ResponseAction {
+  id          String   @id @default(cuid())
+  alertId      String
+  actionType   String
+  status       String
+  output       Json
+  createdAt    DateTime @default(now())
+  alert        Alert    @relation(fields: [alertId], references: [id])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  orgId       String
+  actorId     String?
+  action      String
+  resource    String
+  metadata    Json
+  createdAt   DateTime @default(now())
+  org         Org      @relation(fields: [orgId], references: [id])
+}
+
+model Webhook {
+  id          String   @id @default(cuid())
+  orgId       String
+  name        String
+  url         String
+  secret      String
+  enabled     Boolean @default(true)
+  events      String[]
+  createdAt   DateTime @default(now())
+  org         Org      @relation(fields: [orgId], references: [id])
+}
+
+model ApiToken {
+  id          String   @id @default(cuid())
+  orgId       String
+  name        String
+  tokenHash   String
+  createdAt   DateTime @default(now())
+  lastUsedAt  DateTime?
+  org         Org      @relation(fields: [orgId], references: [id])
+}
